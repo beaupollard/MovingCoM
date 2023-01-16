@@ -161,8 +161,8 @@ def main_run(motor_ids,body_id,sim,final_pos):
 
     while sim.getSimulationState()!=sim.simulation_stopped:
         pass
-
-    return 
+    
+    return current_state[6].item(), current_state[8].item()
 
 def get_objects():
     motor_ids=[]
@@ -211,11 +211,15 @@ gamma = 0.9
 LR=1e-3
 loss_out=[]
 optimizer = torch.optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
-
+xpos_rec=[]
+zpos_rec=[]
 steps_done=0
 run_nums=0
 
 # change_track_links()
 while run_nums<10000:
-    main_run(motor_ids, body_ids, sim, [-6.0, 2.1])
+    xpos, zpos= main_run(motor_ids, body_ids, sim, [-6.0, 2.1])
+    xpos_rec.append(xpos)
+    zpos_rec.append(zpos)
     run_nums+=1
+print('stop')
