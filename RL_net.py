@@ -14,11 +14,11 @@ Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
 
 class RL_NN(nn.Module):
-    def __init__(self, states = 4, actions = 2, lr=1e-4, hidden_layers=64, batch_size=10):
+    def __init__(self, states = 15, actions = 2, lr=1e-4, hidden_layers=64, batch_size=10):
         super(RL_NN, self).__init__()
         self.batch_size=batch_size
         self.states = states
-        self.action_inputs=[-10.,10.]
+        self.action_inputs=[-0.3,0.2]
         self.model_predict = nn.Sequential(
             nn.Linear(states+1, 2*hidden_layers),
             nn.ReLU(),
