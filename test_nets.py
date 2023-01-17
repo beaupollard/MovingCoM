@@ -103,11 +103,10 @@ def set_action(state):
     eps_threshold = eps_end + (eps_start - eps_end)*math.exp(-1.*steps_done/eps_decay)
     steps_done+=1
     action = policy_net(state)
-    if sample>eps_threshold:
-        with torch.no_grad():
-            action = policy_net(state).argmax().item()
-    else:
-        action = random.randint(0,1)
+
+    with torch.no_grad():
+        action = policy_net(state).argmax().item()
+
     sim.setJointTargetPosition(motor_ids[-1],possible_actions[action])
     # sim.setJointTargetForce(motor_ids[-1],possible_actions[action])
     return torch.tensor([action],dtype=torch.int64)   
@@ -117,8 +116,8 @@ def main_run(motor_ids,body_id,sim,final_pos):
     radius=[4.5/39.37,4.5/39.37]
     velo=25. 
     torque=[]
-    # client.setStepping(False)
-    # client.setStepping(True)
+    client.setStepping(False)
+    client.setStepping(True)
 
     sim.startSimulation()
 
@@ -138,23 +137,7 @@ def main_run(motor_ids,body_id,sim,final_pos):
             time=sim.getSimulationTime()
             end_sim_var=True
             reward = 0
-            next_state=None
-        elif current_state[6].item()<final_pos[0] and current_state[8].item()>final_pos[1]:
-            time=sim.getSimulationTime()
-            end_sim_var=True
-            reward = 0
-            next_state=None
-        else:
-            reward=-1+(-1*current_state[6].item()+current_state[8].item())
-            next_state=copy.copy(observation)
-        memory.push(current_state,current_action,next_state,torch.tensor([reward],dtype=torch.float))
-
-        _ = optimize_model()
-        target_net_state_dict = target_net.state_dict()
-        policy_net_state_dict = policy_net.state_dict()
-        for key in policy_net_state_dict:
-            target_net_state_dict[key] = policy_net_state_dict[key]*tau + target_net_state_dict[key]*(1-tau)
-        target_net.load_state_dict(target_net_state_dict)        
+            next_state=None     
         
         count+=1        
     sim.stopSimulation()
