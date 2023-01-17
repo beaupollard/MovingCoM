@@ -187,6 +187,26 @@ class memory_class():
     def __len__(self):
         return len(self.memory)
 
+def generate_terrain():
+    xfield_len=100
+    yfield_len=100
+    xlength=15.
+    z=[]
+    periody=random.uniform(0.1,2)
+    periodx=random.uniform(0.1,2)
+    height=random.uniform(0.025,0.075)
+    slope=random.uniform(10,30)*math.pi/180
+    dz=0
+    offset_y=70
+    for i in range(xfield_len):
+        dz=offset_y*xlength/xfield_len*math.tan(slope)
+        for j in range(yfield_len):
+            if j<offset_y:
+                dz-=xlength/xfield_len*math.tan(slope)
+            z.append(dz+random.uniform(-0.08,0.08))
+            # z.append(dz+height*(math.sin(periodx*i)+math.sin(periody*j))+random.uniform(-0.025,0.025))
+    return sim.createHeightfieldShape(2,30.,xfield_len,yfield_len,xlength,z)
+
 Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
 
@@ -220,8 +240,10 @@ run_nums=0
 
 # change_track_links()
 while run_nums<10000:
+    terrain_id=generate_terrain()
     xpos, zpos= main_run(motor_ids, body_ids, sim, [-6.0, 2.1])
     xpos_rec.append(xpos)
     zpos_rec.append(zpos)
     run_nums+=1
+    sim.removeObject(terrain_id)
 print('stop')
