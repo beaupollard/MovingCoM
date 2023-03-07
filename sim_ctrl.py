@@ -88,13 +88,16 @@ def set_radius(nodes):
                     prev_track=True  
     return radius 
 
-def get_state():
+def get_state(zmap,xmap):
     vel, omega = sim.getObjectVelocity(body_ids)
     pose=sim.getObjectPose(body_ids,-1)
+    outpts=get_height_measures(zmap,xmap,pose)
     state=(np.array(vel))
     state=np.concatenate((state,np.array(omega)))
     state=np.concatenate((state,np.array(pose)))
-    return torch.tensor(np.concatenate((np.array(state).flatten(),np.array([sim.getJointPosition(motor_ids[-1]),sim.getJointVelocity(motor_ids[-1])]))),dtype=torch.float)
+    state=np.concatenate((np.concatenate((np.array(state).flatten(),np.array([sim.getJointPosition(motor_ids[-2]),sim.getJointVelocity(motor_ids[-2]),sim.getJointPosition(motor_ids[-1]),sim.getJointVelocity(motor_ids[-1])]))),outpts))
+    
+    return torch.tensor(state,dtype=torch.float)
 
 def set_action(state):
     global steps_done
@@ -107,18 +110,45 @@ def set_action(state):
         with torch.no_grad():
             action = policy_net(state).argmax().item()
     else:
-        action = random.randint(0,1)
-    sim.setJointTargetPosition(motor_ids[-1],possible_actions[action])
-    # sim.setJointTargetForce(motor_ids[-1],possible_actions[action])
-    return torch.tensor([action],dtype=torch.int64)   
+        action = random.randint(0,3)
 
-def main_run(motor_ids,body_id,sim,final_pos):
+    sim.setJointTargetPosition(motor_ids[-2],possible_actions[action,0])
+    sim.setJointTargetPosition(motor_ids[-1],possible_actions[action,1])
+    # sim.setJointTargetForce(motor_ids[-1],possible_actions[action])
+    return torch.tensor([action],dtype=torch.int64)
+
+def get_height_measures(zmap,xmap,pose):
+    for i in range(len(xmap)-1):
+        if (pose[0]-xmap[i])*(pose[0]-xmap[i+1])<=0.:
+            ind_x=i
+        if (pose[1]-xmap[i])*(pose[1]-xmap[i+1])<=0.:
+            ind_y=i
+    try:
+        xpts=xmap[ind_x-8:ind_x-3]
+        ypts=xmap[ind_y-6:ind_y+6]
+        zpts=zmap[ind_y-6:ind_y+6,ind_x-8:ind_x-3]
+        outpts=np.concatenate((np.concatenate((xpts,ypts)),zpts.flatten()))
+    except:
+        outpts=np.zeros(77)
+    
+    return outpts
+    # for i in range(len(xpts)):
+    #     for j in range(len(ypts)):
+    #         c0=sim.createPrimitiveShape(sim.primitiveshape_spheroid,[0.1,0.1,0.1])
+    #         sim.setObjectPosition(c0,-1,[xpts[i],ypts[j],zpts[j,i]+0.05])            
+    # for i in range(6):
+    #     for j in range(15):
+    #         c0=sim.createPrimitiveShape(sim.primitiveshape_spheroid,[0.1,0.1,0.1])
+    #         sim.setObjectPosition(c0,-1,[xmap[ind_x-13-i],xmap[ind_y-5+j],zmap[ind_y-5+j,ind_x-13-i]+0.05])
+    # print('hey')
+
+def main_run(motor_ids,body_id,sim,final_pos,zmap,xmap):
     
     radius=[4.5/39.37,4.5/39.37]
     velo=25. 
     torque=[]
-    # client.setStepping(False)
-    # client.setStepping(True)
+    client.setStepping(False)
+    client.setStepping(True)
 
     sim.startSimulation()
 
@@ -128,24 +158,24 @@ def main_run(motor_ids,body_id,sim,final_pos):
     ## Run simulation ##
     while end_sim_var==False:
         client.step()
-        current_state = get_state()
+        current_state = get_state(zmap,xmap)
         steering(sim,body_id,motor_ids,radius,velo)
         current_action = set_action(current_state)
         client.step()
-        observation = get_state()
+        observation = get_state(zmap,xmap)
 
         if sim.getSimulationTime()>30. or current_state[10]>0.5:
             time=sim.getSimulationTime()
             end_sim_var=True
             reward = 0
             next_state=None
-        elif current_state[6].item()<final_pos[0] and current_state[8].item()>final_pos[1]:
-            time=sim.getSimulationTime()
-            end_sim_var=True
-            reward = 0
-            next_state=None
+        # elif current_state[6].item()<final_pos[0] and current_state[8].item()>final_pos[1]:
+        #     time=sim.getSimulationTime()
+        #     end_sim_var=True
+        #     reward = 0
+        #     next_state=None
         else:
-            reward=-1+(-1*current_state[6].item()+current_state[8].item())
+            reward=abs(current_state[6].item()-x_init)+(current_state[8].item())
             next_state=copy.copy(observation)
         memory.push(current_state,current_action,next_state,torch.tensor([reward],dtype=torch.float))
 
@@ -162,11 +192,11 @@ def main_run(motor_ids,body_id,sim,final_pos):
     while sim.getSimulationState()!=sim.simulation_stopped:
         pass
     
-    return current_state[6].item(), current_state[8].item()
+    return current_state[6].item(), current_state[8].item(), sim.getSimulationTime(), count
 
 def get_objects():
     motor_ids=[]
-    ids=['/back_right','/back_left','/payload']
+    ids=['/back_right','/back_left','/payload','/payload_x']
     for i in ids:
         motor_ids.append(sim.getObject(i))
     
@@ -192,10 +222,13 @@ def generate_terrain():
     yfield_len=100
     xlength=15.
     z=[]
-    periody=random.uniform(0.1,2)
-    periodx=random.uniform(0.1,2)
-    height=random.uniform(0.025,0.075)
-    slope=random.uniform(10,30)*math.pi/180
+    x=[]
+    y=[]
+    xloc=np.linspace(0,xlength,xfield_len)-xlength/2
+    # periody=random.uniform(0.1,2)
+    # periodx=random.uniform(0.1,2)
+    # height=random.uniform(0.025,0.075)
+    slope=random.uniform(10,20)*math.pi/180
     dz=0
     offset_y=70
     for i in range(xfield_len):
@@ -204,8 +237,14 @@ def generate_terrain():
             if j<offset_y:
                 dz-=xlength/xfield_len*math.tan(slope)
             z.append(dz+random.uniform(-0.08,0.08))
+
+
             # z.append(dz+height*(math.sin(periodx*i)+math.sin(periody*j))+random.uniform(-0.025,0.025))
-    return sim.createHeightfieldShape(2,30.,xfield_len,yfield_len,xlength,z)
+    return sim.createHeightfieldShape(2,30.,xfield_len,yfield_len,xlength,z), np.reshape(np.array(z),(xfield_len,yfield_len)), xloc
+
+def create_dots(pts):
+    for i in 10:
+        sim.createPrimitiveShape()
 
 Transition = namedtuple('Transition',
                         ('state', 'action', 'next_state', 'reward'))
@@ -213,8 +252,8 @@ Transition = namedtuple('Transition',
 memory=memory_class(10000)
 policy_net=RL_net.RL_NN()
 target_net=RL_net.RL_NN()
-target_net.load_state_dict(torch.load("./target_net"))
-policy_net.load_state_dict(torch.load("./policy_net"))
+# target_net.load_state_dict(torch.load("./target_net"))
+# policy_net.load_state_dict(torch.load("./policy_net"))
 # target_net.load_state_dict(policy_net.state_dict())
 
 possible_actions=policy_net.action_inputs
@@ -222,6 +261,7 @@ possible_actions=policy_net.action_inputs
 # client = RemoteAPIClient(port=23000)
 client = RemoteAPIClient(port=23000)
 sim = client.getObject('sim')
+sim.loadScene('/home/beau/Documents/moving_cg/U0_tracked_x_y_cg.ttt')
 motor_ids, body_ids = get_objects()
 
 eps_start = 0.9
@@ -235,15 +275,24 @@ loss_out=[]
 optimizer = torch.optim.AdamW(policy_net.parameters(), lr=LR, amsgrad=True)
 xpos_rec=[]
 zpos_rec=[]
+time_rec=[]
+iters_rec=[]
 steps_done=0
 run_nums=0
 
 # change_track_links()
 while run_nums<10000:
-    terrain_id=generate_terrain()
-    xpos, zpos= main_run(motor_ids, body_ids, sim, [-6.0, 2.1])
+    pose=sim.getObjectPose(body_ids,-1)
+    x_init=pose[0]
+    terrain_id, zmap, xmap = generate_terrain()
+    xpos, zpos, times, iter= main_run(motor_ids, body_ids, sim, [-6.0, 2.1],zmap,xmap)
+    time_rec.append(times)
+    iters_rec.append(iter)
     xpos_rec.append(xpos)
     zpos_rec.append(zpos)
     run_nums+=1
     sim.removeObject(terrain_id)
+    print(run_nums)
 print('stop')
+torch.save(policy_net.state_dict(), 'policy_net_unstruct')
+torch.save(target_net.state_dict(), 'target_net_unstruct')
