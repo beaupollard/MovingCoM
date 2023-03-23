@@ -11,6 +11,7 @@ class sim_run():
         self.client.setStepping(stepping)
 
         self.joint_ids=self.get_obj(joint_names)
+        # self.sim.setJointPosition(self.joint_ids[-1],-90*math.pi/180+np.random.normal(0,0.02))
         self.body_ids=self.get_obj(body_names)
         self.init_pose=np.array(self.sim.getObjectPose(self.body_ids[0],-1))
 
@@ -19,7 +20,7 @@ class sim_run():
         self.body_ids.append(self.sim.createPrimitiveShape(self.sim.primitiveshape_cuboid,wall_dims))
         self.sim.setObjectPosition(self.body_ids[-1],-1,[wall_dims[0]/2-0.5,0.,wall_dims[-1]/2])
         self.sim.setObjectInt32Param(self.body_ids[-1],self.sim.shapeintparam_respondable,1)
-        self.final_pos=[1.5,0.75]
+        self.final_pos=[3.0,0.75]
         self.sim.startSimulation()
 
     def get_obj(self,names):
@@ -56,22 +57,30 @@ class sim_run():
         self.set_joint_velos(action)
         self.client.step()
         state=self.record_state()
-        flag=self.end_sim()
-        return flag, state
+        flag, sim_time=self.end_sim()
+        return flag, state, sim_time
     
     def end_sim(self):
+        # if abs(self.sim.getJointPosition(self.joint_ids[-1])+math.pi/2)*180/math.pi>15 or self.sim.getSimulationTime()>10:
+        #     sim_time=self.sim.getSimulationTime()
+        #     self.kill_sim()
+        #     return True, sim_time
+        # else:
+        #     return False, 0
         pin=self.sim.getObjectPosition(self.body_ids[0],-1)
         pin_ori=np.array(self.sim.getObjectOrientation(self.body_ids[0],-1))
+        sim_time=self.sim.getSimulationTime()
         pin_max=max(abs(pin_ori))
         if pin[0]>self.final_pos[0]:
+            
             self.kill_sim()
-            return True
+            return True, sim_time
         else:
-            if pin_max*180/math.pi>90 or self.sim.getSimulationTime()>10:
+            if pin_max*180/math.pi>90 or self.sim.getSimulationTime()>5.:
                 self.kill_sim()
-                return True
+                return True, sim_time
             else:
-                return False
+                return False, sim_time
             
     def kill_sim(self):
         self.sim.stopSimulation()

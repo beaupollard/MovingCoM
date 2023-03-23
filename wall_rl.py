@@ -11,30 +11,43 @@ import RL_net
 import random
 from collections import deque, namedtuple
 from vrep_ctrl import sim_run
+import itertools
 
 def loss_q(o,a,o2,rw,d):
-    ac.q_optimizer.zero_grad()
+    q_optimizer.zero_grad()
 
-    q = ac.q(o,a)
+    q1 = ac.q1(o,a)
+    q2 = ac.q2(o,a)
 
     with torch.no_grad():
-        a2=ac_target.pi(o2)
-        q_pi_targ = ac_target.q(o2,a2)
-        backup = rw + gamma*(1-d)*q_pi_targ
+        a2, logp_a2 = ac.pi(o2)
+            # Target Q-values
+        q1_pi_targ = ac_target.q1(o2, a2)
+        q2_pi_targ = ac_target.q2(o2, a2)
+        q_pi_targ = torch.min(q1_pi_targ, q2_pi_targ)
+        backup = rw + gamma * (1 - d) * (q_pi_targ - alpha * logp_a2)
     
-    loss_q = ((q-backup)**2).mean()
+    loss_q1 = ((q1 - backup)**2).mean()
+    loss_q2 = ((q2 - backup)**2).mean()
+    loss_q = loss_q1 + loss_q2
     loss_q.backward()
-    torch.nn.utils.clip_grad_norm_(ac.q.parameters(),10)
-    ac.q_optimizer.step()
+    # torch.nn.utils.clip_grad_norm_(ac.q_params,10)
+    q_optimizer.step()
     return loss_q.item()
 
 def loss_pi(o):
+    pi_optimizer.zero_grad()
     pi = ac.pi(o)
-    q_pi = ac.q(o,pi)
-    loss_pi=-q_pi.mean()
+    pi, logp_pi = ac.pi(o)
+    q1_pi = ac.q1(o, pi)
+    q2_pi = ac.q2(o, pi)
+    q_pi = torch.min(q1_pi, q2_pi)
+
+    loss_pi=(alpha * logp_pi - q_pi).mean()
     loss_pi.backward()
-    torch.nn.utils.clip_grad_norm_(ac.pi.parameters(),10)
-    ac.pi_optimizer.step()
+    torch.nn.utils.clip_grad_norm_(ac.pi.parameters(),6)
+    pi_optimizer.step()
+
     return loss_pi.item()
 
 def set_action(state):
@@ -70,14 +83,19 @@ def optimize_model():
     action_batch = torch.cat(batch.action).reshape((batch_size,-1))
     reward_batch = torch.cat(batch.reward)#.reshape((batch_size,1))
     done_batch = torch.cat(batch.done)#.reshape((batch_size,1))
+
     loss_qout=loss_q(state_batch,action_batch,next_state_batch,reward_batch,done_batch)
 
-    for p in ac.q.parameters():
+    for p in ac.q1.parameters():
+        p.requires_grad = False
+    for p in ac.q2.parameters():
         p.requires_grad = False
 
     loss_piout=loss_pi(state_batch)
 
-    for p in ac.q.parameters():
+    for p in ac.q1.parameters():
+        p.requires_grad = True
+    for p in ac.q2.parameters():
         p.requires_grad = True
 
     with torch.no_grad():
@@ -86,7 +104,7 @@ def optimize_model():
             # params, as opposed to "mul" and "add", which would make new tensors.
             p_targ.data.mul_(0.99)
             p_targ.data.add_((1 - 0.99) * p.data)
-    print(loss_piout, loss_qout)
+    # print(loss_piout, loss_qout)
     # state_action_values = A_policy_net.forward(state_batch).gather(1, action_batch)
 
     # next_state_values = torch.zeros(batch_size)
@@ -116,7 +134,7 @@ def main_run():
 
         action=set_action(current_state)
         action2sim=np.array([action[0][0].item(),action[0][0].item(),action[0][1].item(),action[0][1].item(),action[0][2].item()])
-        flag, observation = sim_scene.step_sim(action2sim)
+        flag, observation, sim_time = sim_scene.step_sim(action2sim)
         observation=torch.tensor(observation,dtype=torch.float)
         if flag==True:
             
@@ -124,8 +142,10 @@ def main_run():
             reward = 0
             next_state=copy.copy(observation)
             done=1
+            memory.push(current_state,action,next_state,torch.tensor([reward],dtype=torch.float),torch.tensor([done],dtype=torch.float))
+            return sim_time
         else:
-            reward=np.array(sim_scene.sim.getObjectPosition(sim_scene.body_ids[0],-1))[0]-init_state[0]+np.array(sim_scene.sim.getObjectVelocity(sim_scene.body_ids[0]))[0][0]
+            reward=np.array(sim_scene.sim.getObjectPosition(sim_scene.body_ids[0],-1))[0]-init_state[0]+np.array(sim_scene.sim.getObjectVelocity(sim_scene.body_ids[0]))[0][0]#-sim_scene.sim.getSimulationTime()
             next_state=copy.copy(observation)
             done=0
         memory.push(current_state,action,next_state,torch.tensor([reward],dtype=torch.float),torch.tensor([done],dtype=torch.float))
@@ -150,8 +170,8 @@ Transition = namedtuple('Transition',
 
 ## Initialize the networks ##
 memory=memory_class(10000)
-ac=RL_net.AC()
-# ac.load_state_dict(torch.load('./AC_net_unstruct'))
+ac=RL_net.MLPActorCritic()
+ac.load_state_dict(torch.load('./AC_net_unstruct'))
 ac_target=copy.deepcopy(ac)
 # Q_policy_net=RL_net.RL_Q()
 # Q_target_net=copy.deepcopy(Q_policy_net)
@@ -162,7 +182,7 @@ ac_target=copy.deepcopy(ac)
 
 eps_start = 0.9
 eps_end = 0.05
-eps_decay = 1000
+eps_decay = 100
 batch_size=128
 tau = 0.005
 gamma = 0.9
@@ -174,8 +194,14 @@ xpos_rec=[]
 zpos_rec=[]
 time_rec=[]
 iters_rec=[]
-steps_done=0
+steps_done=10000
 run_nums=0
+alpha = 0.2
+sim_time_rec=[]
+
+q_params = itertools.chain(ac.q1.parameters(), ac.q2.parameters())
+pi_optimizer = torch.optim.Adam(ac.pi.parameters(), lr=1e-3)
+q_optimizer = torch.optim.Adam(q_params, lr=1e-3)
 
 ## Initialize the simulations ##
 joint_names=['/Wheel_assem1','/Wheel_assem3','/Wheel_assem4','/Wheel_assem2','/Payload_x']
@@ -187,9 +213,9 @@ while run_nums<10000:
 
     sim_scene=sim_run(joint_names,body_names,scene_name) 
     init_state=np.array(sim_scene.sim.getObjectPosition(sim_scene.body_ids[0],-1))
-    main_run()
+    sim_time_rec.append(main_run())
     if count==100:
-        torch.save(ac.state_dict(), 'AC_net_unstruct')
+        torch.save(ac.state_dict(), 'AC_net_unstruct2')
         count=0
     else:
         count+=1
